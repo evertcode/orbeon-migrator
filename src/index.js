@@ -231,14 +231,9 @@ async function main() {
     // Replace old bindings with new syntax in the original XML
     let modifiedXml = xmlContent;
 
-    // Remove ALL legacy action bindings (not just the migrated ones)
-    for (const action of parsed.actions) {
-      const bindingId = action.id;
-      const regex = new RegExp(
-        `<xf:action\\s+id="${escapeRegex(bindingId)}"[\\s\\S]*?<\\/xf:action>`,
-        'g'
-      );
-      modifiedXml = modifiedXml.replace(regex, '');
+    // Remove migrated action bindings
+    for (const action of filteredParsed.actions) {
+      modifiedXml = removeActionBinding(modifiedXml, action.id);
     }
 
     // Insert new syntax before </xf:model>
@@ -297,6 +292,61 @@ async function main() {
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Removes a <xf:action id="bindingId">...</xf:action> block from xml.
+ * Handles nested <xf:action> elements by counting open/close depth.
+ */
+function removeActionBinding(xml, bindingId) {
+  const OPEN = '<xf:action';
+  const CLOSE = '</xf:action>';
+  const idAttr = `id="${bindingId}"`;
+
+  let pos = 0;
+  while (pos < xml.length) {
+    const start = xml.indexOf(OPEN, pos);
+    if (start === -1) break;
+
+    const tagEnd = xml.indexOf('>', start);
+    if (tagEnd === -1) break;
+
+    const openTag = xml.slice(start, tagEnd + 1);
+
+    if (openTag.includes(idAttr)) {
+      if (openTag.endsWith('/>')) {
+        return xml.slice(0, start) + xml.slice(tagEnd + 1);
+      }
+
+      let depth = 1;
+      let search = tagEnd + 1;
+
+      while (depth > 0 && search < xml.length) {
+        const nextOpen = xml.indexOf(OPEN, search);
+        const nextClose = xml.indexOf(CLOSE, search);
+
+        if (nextClose === -1) break;
+
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          const nestedTagEnd = xml.indexOf('>', nextOpen);
+          const nestedTag = xml.slice(nextOpen, nestedTagEnd + 1);
+          if (!nestedTag.endsWith('/>')) depth++;
+          search = nextOpen + OPEN.length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            return xml.slice(0, start) + xml.slice(nextClose + CLOSE.length);
+          }
+          search = nextClose + CLOSE.length;
+        }
+      }
+      break;
+    }
+
+    pos = start + 1;
+  }
+
+  return xml;
 }
 
 main().catch(err => {
