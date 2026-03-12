@@ -231,10 +231,9 @@ async function main() {
     // Replace old bindings with new syntax in the original XML
     let modifiedXml = xmlContent;
 
-    // Remove old action bindings
-    for (const action of filteredParsed.actions) {
+    // Remove ALL legacy action bindings (not just the migrated ones)
+    for (const action of parsed.actions) {
       const bindingId = action.id;
-      // Regex to remove <xf:action id="...-binding">...</xf:action>
       const regex = new RegExp(
         `<xf:action\\s+id="${escapeRegex(bindingId)}"[\\s\\S]*?<\\/xf:action>`,
         'g'
