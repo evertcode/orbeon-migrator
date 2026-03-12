@@ -167,7 +167,7 @@ test('set-visibility → fr:control-setvisible', wrap(`
   assert(generated.fullXml.includes('fr:control-setvisible'), 'Should generate setvisible');
 });
 
-// Test 6: Itemset (dropdown population)
+// Test 6: Itemset (dropdown population) - default mode (fr:service-result)
 test('fr-itemset-action → fr:control-setitems', wrap(`
   <xf:instance id="srv-items-instance" class="fr-service"><body/></xf:instance>
   <xf:submission id="srv-items-submission" class="fr-service" resource="https://api.test.com/items" method="get"/>
@@ -187,15 +187,16 @@ test('fr-itemset-action → fr:control-setitems', wrap(`
     <xf:action event="xforms-submit-done" ev:observer="srv-items-submission">
       <xf:action class="fr-itemset-action">
         <xf:var name="control-name" value="'city-dropdown'"/>
-        <xf:var name="items" value="//cities/city"/>
-        <xf:var name="label" value="name"/>
-        <xf:var name="value" value="code"/>
+        <xf:var name="response-items" value="//cities/city"/>
+        <xf:var name="item-label" value="name"/>
+        <xf:var name="item-value" value="code"/>
       </xf:action>
     </xf:action>
   </xf:action>
 `), ({ generated }) => {
   assert(generated.fullXml.includes('fr:control-setitems'), 'Should generate setitems');
-  assert(generated.fullXml.includes('fr:dataset-write'), 'Should use dataset pattern');
+  assert(!generated.fullXml.includes('fr:dataset-write'), 'Should NOT use dataset by default');
+  assert(generated.fullXml.includes('items="//cities/city"'), 'Should use direct XPath by default');
   assert(generated.fullXml.includes('label="name"'), 'Should have label attr');
   assert(generated.fullXml.includes('value="code"'), 'Should have value attr');
 });
@@ -230,7 +231,7 @@ test('xforms-select → item-selected', wrap(`
   assert(generated.fullXml.includes('events="item-selected"'), 'Should have item-selected');
 });
 
-// Test 9: Original conversation XML (regression)
+// Test 9: Original XML (regression) - default mode (fr:service-result)
 test('Original XML from conversation (regression)', wrap(`
   <xf:instance id="srv-get-todos-instance" class="fr-service" xxf:exclude-result-prefixes="#all">
     <body>&lt;data&gt;&lt;user/&gt;&lt;/data&gt;</body>
@@ -270,9 +271,9 @@ test('Original XML from conversation (regression)', wrap(`
   assert(parsed.actions.length === 1, 'Should find 1 action');
   assert(parsed.services.length === 1, 'Should find 1 service');
   assert(validation.valid, 'Should pass validation');
-  assert(generated.fullXml.includes('fr:dataset-write'), 'Should use dataset pattern');
+  assert(!generated.fullXml.includes('fr:dataset-write'), 'Should NOT use dataset by default');
   assert(generated.fullXml.includes('saxon:serialize'), 'Should preserve saxon:serialize');
-  assert(!generated.fullXml.includes('fr:service-result'), 'Should NOT use service-result');
+  assert(!generated.fullXml.includes('fr:service-result()'), 'Should NOT use fr:service-result wrapper');
   assert(generated.fullXml.includes('events="activated"'), 'Should map DOMActivate');
   assert(generated.fullXml.includes('controls="btn-get-user"'), 'Should strip -control');
 });
@@ -318,7 +319,7 @@ test('xf:setvalue without condition → fr:control-setvalue', wrap(`
   assert(responseActions[1].controlName === 'email', 'Should extract "email"');
   assert(generated.fullXml.includes('control="username"'), 'Should have username control');
   assert(generated.fullXml.includes('control="email"'), 'Should have email control');
-  assert(generated.fullXml.includes("fr:dataset('srv-user-response')//username"), 'Should transform context() to dataset');
+  assert(generated.fullXml.includes('control="username"') && generated.fullXml.includes('value="//username"'), 'Should use direct XPath //username');
   assert(!generated.fullXml.includes('fr:if'), 'Should NOT have fr:if without condition');
 });
 
@@ -362,7 +363,7 @@ test('xf:setvalue with if condition → fr:if + fr:control-setvalue', wrap(`
 
   // Check generated XML
   assert(generated.fullXml.includes('fr:if condition='), 'Should have fr:if for conditional setvalue');
-  assert(generated.fullXml.includes("fr:dataset('srv-auth-response')//success"), 'Should transform context() in condition');
+  assert(generated.fullXml.includes('//success'), 'Should use direct XPath in condition (no wrapper)');
   assert(generated.fullXml.includes('control="token"'), 'Should have token control');
   assert(generated.fullXml.includes('control="error-msg"'), 'Should have error-msg control');
   assert(generated.fullXml.includes('control="full-response"'), 'Should have full-response control');
@@ -390,6 +391,46 @@ test('xf:setvalue with deep nested ref path', wrap(`
   const action = parsed.actions[0].responseActions[0].actions[0];
   assert(action.controlName === 'nested-field', `Should extract last segment, got "${action.controlName}"`);
   assert(generated.fullXml.includes('control="nested-field"'), 'Should use last segment as control name');
+});
+
+// Test 14: useDataset mode generates fr:dataset-write + fr:dataset()
+function testWithOptions(name, xml, options, assertions) {
+  try {
+    const parsedXml = parser.parse(xml);
+    const parsed = parseOrbeonXml(parsedXml);
+    const generated = generateActionSyntax(parsed, options);
+    const validation = validateMigration(parsed, generated, options);
+
+    const results = assertions({ parsed, generated, validation });
+    if (results === false) throw new Error('Assertion returned false');
+
+    console.log(chalk.green(`  ✓ ${name}`));
+    passed++;
+  } catch (err) {
+    console.log(chalk.red(`  ✗ ${name}: ${err.message}`));
+    failed++;
+  }
+}
+
+testWithOptions('useDataset=true generates fr:dataset-write pattern', wrap(`
+  <xf:instance id="srv-api-instance" class="fr-service"><body/></xf:instance>
+  <xf:submission id="srv-api-submission" class="fr-service" resource="https://api.test.com" method="get"/>
+  <xf:action id="act-load-data-binding">
+    <xf:action event="DOMActivate" ev:observer="btn-load-control">
+      <xf:send submission="srv-api-submission"/>
+    </xf:action>
+    <xf:action event="xforms-submit-done" ev:observer="srv-api-submission">
+      <xf:action class="fr-set-control-value-action">
+        <xf:var name="control-name" value="'result'"/>
+        <xf:var name="control-value" value="//data"/>
+      </xf:action>
+    </xf:action>
+  </xf:action>
+`), { useDataset: true }, ({ generated, validation }) => {
+  assert(validation.valid, 'Should pass validation');
+  assert(generated.fullXml.includes('fr:dataset-write'), 'Should use fr:dataset-write');
+  assert(generated.fullXml.includes("fr:dataset('srv-api-response')//data"), 'Should use fr:dataset() in value');
+  assert(!generated.fullXml.includes('fr:service-result()'), 'Should NOT use fr:service-result');
 });
 
 // ─── Summary ─────────────────────────────────────────────────

@@ -141,14 +141,27 @@ async function main() {
     actions: parsed.actions.filter(a => selectedActions.includes(a.name))
   };
 
-  // Step 4: Generate Action Syntax
+  // Step 4: Choose response access mode
+  const { useDataset } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'useDataset',
+      message: chalk.yellow('¿Usar patrón fr:dataset-write + fr:dataset() para acceder a la respuesta?') +
+        chalk.gray('\n  (No = acceso directo con fr:service-result(), recomendado)'),
+      default: false
+    }
+  ]);
+
+  const migrationOptions = { useDataset };
+
+  // Step 5: Generate Action Syntax
   spinner.start('Generating Action Syntax...');
-  const generated = generateActionSyntax(filteredParsed);
+  const generated = generateActionSyntax(filteredParsed, migrationOptions);
   spinner.succeed('Action Syntax generated');
 
-  // Step 5: Validate
+  // Step 6: Validate
   spinner.start('Validating migration...');
-  const validation = validateMigration(filteredParsed, generated);
+  const validation = validateMigration(filteredParsed, generated, migrationOptions);
   if (validation.valid) {
     spinner.succeed('Validation passed');
   } else {

@@ -6,7 +6,8 @@ import { EVENT_MAP } from './parser.js';
 
 const VALID_ACTION_EVENTS = new Set(Object.values(EVENT_MAP).map(e => e.event));
 
-export function validateMigration(parsed, generated) {
+export function validateMigration(parsed, generated, options = {}) {
+  const useDataset = options.useDataset ?? false;
   const issues = [];
 
   // 1. Listener ↔ Action matching
@@ -110,17 +111,8 @@ export function validateMigration(parsed, generated) {
     }
   }
 
-  // 3. No fr:service-result
-  if (generated.fullXml.includes('fr:service-result')) {
-    issues.push({
-      level: 'error',
-      message: 'Generated XML uses fr:service-result() which may not work in Orbeon 2025.1',
-      suggestion: 'Use fr:dataset-write + fr:dataset() pattern instead'
-    });
-  }
-
-  // 4. Dataset pattern present when needed
-  if (!generated.fullXml.includes('fr:dataset-write') && parsed.actions.some(a => a.responseActions.length > 0)) {
+  // 3. Dataset pattern present when needed (only when useDataset is enabled)
+  if (useDataset && !generated.fullXml.includes('fr:dataset-write') && parsed.actions.some(a => a.responseActions.length > 0)) {
     issues.push({
       level: 'error',
       message: 'Response handling found but no fr:dataset-write generated',

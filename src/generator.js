@@ -2,8 +2,8 @@
  * generator.js - Generates Orbeon Action Syntax XML from parsed Simple Actions
  *
  * Supports all control events, form load events, and if() conditions.
- * Uses the fr:dataset pattern (dataset-write + dataset()) for compatibility
- * with Orbeon 2025.1
+ * Default: uses fr:service-result() for direct response access.
+ * Optional: pass options.useDataset=true to use fr:dataset-write + fr:dataset() pattern.
  */
 
 const INDENT = '    ';
@@ -14,29 +14,31 @@ function usesSaxonSerialize(expr) {
   return expr && expr.includes('saxon:serialize');
 }
 
-function transformXPath(expr, datasetName) {
+function transformXPath(expr, datasetName, useDataset) {
   if (!expr) return "''";
 
   if (usesSaxonSerialize(expr)) {
-    return `saxon:serialize(fr:dataset('${datasetName}'), 'xml')`;
+    if (useDataset) return `saxon:serialize(fr:dataset('${datasetName}'), 'xml')`;
+    return expr; // direct: leave as-is (context node . is the service response)
   }
 
-  if (expr.startsWith('//') || expr.startsWith('/')) {
-    return `fr:dataset('${datasetName}')${expr}`;
+  if (useDataset) {
+    if (expr.startsWith('//') || expr.startsWith('/')) return `fr:dataset('${datasetName}')${expr}`;
+    return `fr:dataset('${datasetName}')/${expr}`;
   }
 
-  return `fr:dataset('${datasetName}')/${expr}`;
+  // Direct mode: return XPath as-is
+  return expr;
 }
 
 /**
  * Transform XPath expressions that use context() (Orbeon 2016 pattern)
  *
- * context()//username       → fr:dataset('name')//username
- * context()//success='true' → fr:dataset('name')//success='true'
- * //plain-xpath             → fr:dataset('name')//plain-xpath
- * 'literal string'          → 'literal string' (unchanged)
+ * Direct:     context()//username → //username  (strip context())
+ * useDataset: context()//username → fr:dataset('name')//username
+ * 'literal string'               → 'literal string' (unchanged)
  */
-function transformContextXPath(expr, datasetName) {
+function transformContextXPath(expr, datasetName, useDataset) {
   if (!expr) return "''";
 
   // String literals - leave as-is
@@ -44,21 +46,24 @@ function transformContextXPath(expr, datasetName) {
     return expr;
   }
 
-  // Replace context() with fr:dataset reference
   if (expr.includes('context()')) {
-    return expr.replace(/context\(\)/g, `fr:dataset('${datasetName}')`);
+    if (useDataset) return expr.replace(/context\(\)/g, `fr:dataset('${datasetName}')`);
+    // Direct mode: strip context() and keep the path
+    return expr.replace(/context\(\)/g, '');
   }
 
   // Same as regular transformXPath for non-context expressions
   if (usesSaxonSerialize(expr)) {
-    return `saxon:serialize(fr:dataset('${datasetName}'), 'xml')`;
+    if (useDataset) return `saxon:serialize(fr:dataset('${datasetName}'), 'xml')`;
+    return expr;
   }
 
-  if (expr.startsWith('//') || expr.startsWith('/')) {
-    return `fr:dataset('${datasetName}')${expr}`;
+  if (useDataset) {
+    if (expr.startsWith('//') || expr.startsWith('/')) return `fr:dataset('${datasetName}')${expr}`;
+    return `fr:dataset('${datasetName}')/${expr}`;
   }
 
-  return `fr:dataset('${datasetName}')/${expr}`;
+  return expr;
 }
 
 function escapeXmlAttr(str) {
@@ -112,7 +117,7 @@ function generateListener(action) {
 
 // ─── Action Generation ───────────────────────────────────────
 
-function generateAction(action) {
+function generateAction(action, useDataset = false) {
   const lines = [];
   const actionName = action.name;
   const hasService = action.triggers.some(t => t.serviceName);
@@ -140,8 +145,8 @@ function generateAction(action) {
       lines.push(`${INDENT}${INDENT}<fr:service-call service="${serviceName}"/>`);
     }
 
-    // --- Save response to dataset ---
-    if (action.responseActions.length > 0 || action.errorActions.length > 0) {
+    // --- Save response to dataset (only when useDataset is enabled) ---
+    if (useDataset && (action.responseActions.length > 0 || action.errorActions.length > 0)) {
       lines.push('');
       lines.push(`${INDENT}${INDENT}<!-- Save response to dataset -->`);
       lines.push(`${INDENT}${INDENT}<fr:dataset-write name="${datasetName}"/>`);
@@ -153,7 +158,7 @@ function generateAction(action) {
         lines.push('');
         lines.push(`${INDENT}${INDENT}<!-- Map response to form controls -->`);
       }
-      generateResponseActions(lines, responseBlock.actions, datasetName);
+      generateResponseActions(lines, responseBlock.actions, datasetName, useDataset);
     }
 
     // --- Handle error actions ---
@@ -162,7 +167,7 @@ function generateAction(action) {
         lines.push('');
         lines.push(`${INDENT}${INDENT}<!-- Handle service error -->`);
       }
-      generateResponseActions(lines, errorBlock.actions, datasetName);
+      generateResponseActions(lines, errorBlock.actions, datasetName, useDataset);
     }
 
   } else {
@@ -180,11 +185,11 @@ function generateAction(action) {
 /**
  * Generate XML for response actions that read from a dataset
  */
-function generateResponseActions(lines, actions, datasetName) {
+function generateResponseActions(lines, actions, datasetName, useDataset) {
   for (const responseAction of actions) {
     switch (responseAction.type) {
       case 'set-control-value': {
-        const value = transformXPath(responseAction.controlValue, datasetName);
+        const value = transformXPath(responseAction.controlValue, datasetName, useDataset);
         lines.push(`${INDENT}${INDENT}<fr:control-setvalue`);
         lines.push(`${INDENT}${INDENT}    control="${responseAction.controlName}"`);
         lines.push(`${INDENT}${INDENT}    value="${escapeXmlAttr(value)}"/>`);
@@ -192,13 +197,11 @@ function generateResponseActions(lines, actions, datasetName) {
       }
 
       case 'xf-setvalue': {
-        // xf:setvalue with ref to instance and value from context()
-        // Optionally wrapped in fr:if when there's a condition
-        const value = transformContextXPath(responseAction.controlValue, datasetName);
+        const value = transformContextXPath(responseAction.controlValue, datasetName, useDataset);
         const hasCondition = !!responseAction.ifCondition;
 
         if (hasCondition) {
-          const condExpr = transformContextXPath(responseAction.ifCondition, datasetName);
+          const condExpr = transformContextXPath(responseAction.ifCondition, datasetName, useDataset);
           lines.push(`${INDENT}${INDENT}<fr:if condition="${escapeXmlAttr(condExpr)}">`);
           lines.push(`${INDENT}${INDENT}${INDENT}<fr:control-setvalue`);
           lines.push(`${INDENT}${INDENT}${INDENT}    control="${responseAction.controlName}"`);
@@ -210,7 +213,6 @@ function generateResponseActions(lines, actions, datasetName) {
           lines.push(`${INDENT}${INDENT}    value="${escapeXmlAttr(value)}"/>`);
         }
 
-        // Add comment with original ref for traceability
         lines.push(`${INDENT}${INDENT}<!-- original: xf:setvalue ref="${escapeXmlAttr(responseAction.ref)}" -->`);
         break;
       }
@@ -219,7 +221,7 @@ function generateResponseActions(lines, actions, datasetName) {
         const visible = responseAction.visible;
         const visibleValue = (visible === 'true' || visible === 'false')
           ? visible
-          : transformXPath(visible, datasetName);
+          : transformXPath(visible, datasetName, useDataset);
         lines.push(`${INDENT}${INDENT}<fr:control-setvisible`);
         lines.push(`${INDENT}${INDENT}    control="${responseAction.controlName}"`);
         lines.push(`${INDENT}${INDENT}    visible="${escapeXmlAttr(visibleValue)}"/>`);
@@ -230,7 +232,7 @@ function generateResponseActions(lines, actions, datasetName) {
         const readonly = responseAction.readonly;
         const readonlyValue = (readonly === 'true' || readonly === 'false')
           ? readonly
-          : transformXPath(readonly, datasetName);
+          : transformXPath(readonly, datasetName, useDataset);
         lines.push(`${INDENT}${INDENT}<fr:control-setreadonly`);
         lines.push(`${INDENT}${INDENT}    control="${responseAction.controlName}"`);
         lines.push(`${INDENT}${INDENT}    readonly="${escapeXmlAttr(readonlyValue)}"/>`);
@@ -238,7 +240,7 @@ function generateResponseActions(lines, actions, datasetName) {
       }
 
       case 'set-items': {
-        const items = transformXPath(responseAction.itemsExpr, datasetName);
+        const items = transformXPath(responseAction.itemsExpr, datasetName, useDataset);
         lines.push(`${INDENT}${INDENT}<fr:control-setitems`);
         lines.push(`${INDENT}${INDENT}    items="${escapeXmlAttr(items)}"`);
         lines.push(`${INDENT}${INDENT}    label="${responseAction.labelExpr || 'label'}"`);
@@ -307,7 +309,9 @@ function generateInlineActions(lines, actions) {
 
 // ─── Main Export ─────────────────────────────────────────────
 
-export function generateActionSyntax(parsed) {
+export function generateActionSyntax(parsed, options = {}) {
+  const useDataset = options.useDataset ?? false;
+
   const output = {
     listeners: [],
     actions: [],
@@ -321,7 +325,7 @@ export function generateActionSyntax(parsed) {
     output.listeners.push(...listeners);
 
     // Generate action
-    const actionXml = generateAction(action);
+    const actionXml = generateAction(action, useDataset);
     output.actions.push(actionXml);
 
     // Build report entry
@@ -416,10 +420,14 @@ export function generateActionSyntax(parsed) {
   }
 
   // Assemble full XML
+  const modeComment = useDataset
+    ? '<!-- Pattern: fr:service-call → fr:dataset-write → fr:dataset()  -->'
+    : '<!-- Pattern: fr:service-call → direct XPath response access      -->';
+
   const xmlParts = [
     '<!-- ═══════════════════════════════════════════════════════════ -->',
     '<!-- Orbeon Action Syntax (migrated from Simple Actions)       -->',
-    '<!-- Pattern: fr:service-call → fr:dataset-write → fr:dataset() -->',
+    modeComment,
     '<!-- ═══════════════════════════════════════════════════════════ -->',
     '',
     '<!-- Listeners -->',

@@ -188,9 +188,9 @@ function extractResponseActions(actionBlock) {
       actions.push({
         type: 'set-items',
         controlName: vars['control-name'],
-        itemsExpr: vars['items'],
-        labelExpr: vars['label'],
-        valueExpr: vars['value'],
+        itemsExpr: vars['response-items'],
+        labelExpr: vars['item-label'],
+        valueExpr: vars['item-value'],
         hintExpr: vars['hint'] || null
       });
     }
