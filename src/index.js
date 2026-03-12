@@ -202,15 +202,11 @@ async function main() {
   }
 
   // Step 8: Save options
-  // Print blank lines so inquirer has terminal space to render the list
-  process.stdout.write('\n'.repeat(8));
-
   const { saveOption } = await inquirer.prompt([
     {
-      type: 'list',
+      type: 'rawlist',
       name: 'saveOption',
       message: chalk.yellow('What would you like to save?'),
-      pageSize: 5,
       choices: [
         { name: 'Save migrated XML snippet', value: 'snippet' },
         { name: 'Save full form with replacements', value: 'full' },
